@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<!--
+  HTML template for the web build. Expo substitutes the language and title
+  placeholders below from app.json and appends the JS bundle at the end.
+  Keep those placeholder tokens out of comments: the substitution replaces the
+  first textual match, so mentioning them here would consume the replacement.
+  Native builds (Android / iOS) never use this file.
+-->
+<html lang="%LANG_ISO_CODE%" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <!-- viewport-fit=cover lets the installed app paint under the notch -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, shrink-to-fit=no, viewport-fit=cover"
+    />
+
+    <title>%WEB_TITLE%</title>
+
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#4B5BF5" />
+
+    <!-- iOS ignores the web app manifest, so it needs its own tags. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Don't Forget" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/icons/favicon-64.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+
+    <!-- The react-native-web recommended reset, plus PWA-specific touches. -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+      }
+      /* Disables document scrolling so <ScrollView> behaves as it does on native */
+      body {
+        overflow: hidden;
+        /* Paint the app background before the bundle loads, so launching the
+           installed app never flashes white. */
+        background-color: #f4f5fa;
+        overscroll-behavior-y: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+
+    <script>
+      (function () {
+        // Only the exported build ships under /_expo/static/js/web/. Registering
+        // a service worker against the Metro dev server would cache dev bundles
+        // and fight hot reload, so it is skipped there.
+        function isProductionBuild() {
+          return !!document.querySelector('script[src*="/_expo/static/js/web/"]');
+        }
+
+        if ('serviceWorker' in navigator) {
+          window.addEventListener('load', function () {
+            if (!isProductionBuild()) return;
+
+            navigator.serviceWorker
+              .register('/sw.js')
+              .then(function (registration) {
+                // Let a newly installed worker take over now rather than on some
+                // later visit, so a deploy reaches installed users on a refresh.
+                function promote(worker) {
+                  if (worker) worker.postMessage('skip-waiting');
+                }
+                promote(registration.waiting);
+                registration.addEventListener('updatefound', function () {
+                  promote(registration.installing);
+                });
+                // Look for a new deploy each time the app comes back to the front.
+                document.addEventListener('visibilitychange', function () {
+                  if (document.visibilityState === 'visible') registration.update();
+                });
+              })
+              .catch(function () {
+                /* unsupported or blocked: the app still runs normally */
+              });
+
+            // Reload once when a new worker takes control, so fresh code is live.
+            var reloading = false;
+            navigator.serviceWorker.addEventListener('controllerchange', function () {
+              if (reloading) return;
+              reloading = true;
+              window.location.reload();
+            });
+          });
+        }
+
+        // Ask the browser not to evict this origin's storage — destinations,
+        // lists, history and settings all live there. Best effort; may be denied.
+        if (navigator.storage && navigator.storage.persist) {
+          navigator.storage
+            .persisted()
+            .then(function (already) {
+              if (!already) navigator.storage.persist();
+            })
+            .catch(function () {});
+        }
+      })();
+    </script>
+  </head>
+
+  <body>
+    <noscript>צריך להפעיל JavaScript כדי להריץ את האפליקציה.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

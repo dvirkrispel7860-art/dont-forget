@@ -1,17 +1,25 @@
 {
   "expo": {
-    "name": "dont-forget",
+    "name": "Don't Forget",
     "slug": "dont-forget",
+    "scheme": "dontforget",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F6FA"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "net.dontforget.app"
     },
     "android": {
+      "package": "net.dontforget.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#EDEFFE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -19,7 +27,17 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png",
+      "name": "Don't Forget",
+      "shortName": "Don't Forget",
+      "themeColor": "#4B5BF5",
+      "backgroundColor": "#F4F5FA",
+      "display": "standalone",
+      "orientation": "portrait",
+      "lang": "he"
+    },
+    "plugins": ["expo-router"]
   }
 }
