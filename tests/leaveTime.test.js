@@ -1,6 +1,6 @@
 /* Tests for the real src/transit/leaveTime.ts (compiled, not reimplemented). */
 const L = require('./transit/leaveTime.js');
-const { walkingMinutes } = require('./transit/nearbyRoute.js');
+const { walkingMinutes } = require('./transit/walking.js');
 
 let pass = 0, fail = 0;
 function check(name, got, want) {

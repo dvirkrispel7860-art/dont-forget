@@ -13,7 +13,7 @@
  */
 const path = require('path');
 const P = require(path.join(__dirname, 'transit/routePlanner.js'));
-const { walkingMinutes } = require(path.join(__dirname, 'transit/nearbyRoute.js'));
+const { walkingMinutes } = require(path.join(__dirname, 'transit/walking.js'));
 
 const NOW = new Date('2026-08-20T09:00:00').getTime();
 const at = (mins) => new Date(NOW + mins * 60_000).toISOString();
