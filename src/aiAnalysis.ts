@@ -304,6 +304,29 @@ const CONFIDENCE_THRESHOLD = 2;
 /** Hebrew one-letter prefixes: "לים" → "ים", "בסופר" → "סופר". */
 const PREFIXES = ['ל', 'ב', 'כ', 'מ', 'ש', 'ה', 'ו'];
 
+/**
+ * Words that must never be read as prefix + word.
+ *
+ * Stripping a prefix is what lets "לים" find "ים". The cost is that a word whose
+ * first letter happens to be one of those prefixes gets a second reading — and
+ * when the remainder is itself a keyword, that reading can win on a word that has
+ * nothing to do with it. "מים" is not "from the sea", it is water, and a bottle
+ * of it turned "אני הולך לחדר כושר וצריך לקחת מגבת ובקבוק מים" into a trip to
+ * the beach.
+ *
+ * Every entry below is a real Hebrew word that was demonstrated to misclassify a
+ * sentence, and none of them has a prefixed reading worth keeping — "from the
+ * sea" is "מהים", "from nature" is "מהטבע". They are listed rather than detected
+ * because telling a word from a prefixed word needs a dictionary, and a wrong
+ * guess in either direction is worse than a short explicit list.
+ *
+ * Deliberately not here: "מחבר". It misclassifies "אני מחבר את הכבל" as friends,
+ * but it is also how someone would write "coming back from a friend" — so
+ * excluding it would trade one wrong answer for another. "מחברת" (a notebook) has
+ * no such ambiguity and is in.
+ */
+const NEVER_STRIP = new Set(['מים', 'שים', 'מטבע', 'מחברת', 'מטס']);
+
 function normalize(text: string): string {
   return text
     .toLowerCase()
@@ -315,6 +338,8 @@ function normalize(text: string): string {
 /** The prefix-stripped form of a token, or null when there is nothing to strip. */
 function withoutPrefix(token: string): string | null {
   if (token.length < 3) return null;
+  // A word in its own right keeps its first letter — see NEVER_STRIP.
+  if (NEVER_STRIP.has(token)) return null;
   return PREFIXES.includes(token[0]) ? token.slice(1) : null;
 }
 
