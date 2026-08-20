@@ -2,6 +2,10 @@
 
 > אל תצא בלי מה שאתה צריך.
 
+[![CI](https://github.com/dvirkrispel7860-art/dont-forget/actions/workflows/ci.yml/badge.svg)](https://github.com/dvirkrispel7860-art/dont-forget/actions/workflows/ci.yml)
+
+**🌐 [לאפליקציה החיה](https://dvirkrispel7860-art.github.io/dont-forget/)**
+
 אפליקציה שעוזרת לא לשכוח דברים כשיוצאים מהבית. מגדירים פעם אחת יעדים קבועים
 (אימון, בית ספר, ים...) ולכל יעד את הדברים שלוקחים אליו. בפעם הבאה בוחרים את
 היעד ועושים **בדיקת יציאה** מהירה.
