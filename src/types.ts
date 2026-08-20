@@ -1,4 +1,5 @@
-import { TransitPlan, TravelMode } from './transit/types';
+import { TransitPlan, TransitStopRef, TravelMode } from './transit/types';
+import { Coords } from './weather/types';
 
 /**
  * Data model for Don't Forget.
@@ -50,6 +51,22 @@ export type Destination = {
    * those fall back to navigating by name.
    */
   address?: string;
+  /**
+   * Coordinates for the destination, once something has established them.
+   *
+   * Written by the weather layer after it geocodes the address successfully, and
+   * by "📍 בחר מיקום" when the user sets the point themselves — never guessed,
+   * and never overwritten once set. Whoever has it uses it directly, which is why
+   * the address is only ever geocoded once.
+   */
+  coords?: Coords;
+  /**
+   * What those coordinates are actually of — "תל אביב-יפו, ישראל" for a town the
+   * geocoder matched, "המיקום שלך" for a point the user set from their device.
+   * Kept so the forecast can name its real location instead of implying it was
+   * resolved to the street the address names.
+   */
+  coordsLabel?: string;
   /** Favourites are listed first on the home screen. */
   favorite?: boolean;
   /** Optional departure reminder. Absent on destinations that never set one. */
@@ -66,9 +83,27 @@ export type Destination = {
 export type SkipMap = Record<string, string[]>;
 
 /**
- * Destinations with an exit in progress, mapped to when it started.
- * Persisted so a refresh mid-departure does not drop the user back to the
- * normal state while their ticks are still saved.
+ * A travel mode chosen for the departure happening right now, per destination.
+ *
+ * In memory only, exactly like the skips: the destination keeps the mode it was
+ * set up with, and this is "today I am driving instead". Cleared when a departure
+ * starts or ends, so it never leaks into the next one.
+ */
+export type DepartureModes = Record<string, TravelMode>;
+
+/**
+ * A boarding stop the user picked by hand for the departure happening now.
+ *
+ * In memory only, like the travel mode above: the destination's own transit setup
+ * is never rewritten by it, and it is dropped when the departure starts or ends.
+ * Absent means "use the stop the app found near you".
+ */
+export type DepartureStops = Record<string, TransitStopRef>;
+
+/**
+ * Destinations with a departure in progress, mapped to when it started.
+ * Persisted so a refresh in the middle of one keeps the ticks instead of
+ * starting the list over.
  */
 export type ActiveExits = Record<string, number>;
 
@@ -89,7 +124,7 @@ export type TripItem = {
   skipped: boolean;
 };
 
-/** One completed exit check, written by "סיימתי את היציאה". */
+/** One completed exit check, written by "מוכן לצאת". */
 export type Trip = {
   id: string;
   destinationId: string;

@@ -21,6 +21,11 @@
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#4B5BF5" />
 
+    <!-- The standard name for "install me as an app". Chrome warns when only the
+         Apple-prefixed one is present, so both are here: this is the spec's, and
+         the apple- one below is what older iOS still reads. -->
+    <meta name="mobile-web-app-capable" content="yes" />
+
     <!-- iOS ignores the web app manifest, so it needs its own tags. -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />

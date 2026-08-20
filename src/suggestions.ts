@@ -3,7 +3,7 @@ import { Destination, Trip } from './types';
 /**
  * Smart suggestions, computed locally from the trip history this app already
  * stores. No AI, no server, no invented data — every number below comes from a
- * real exit the user completed with "סיימתי את היציאה".
+ * real exit the user completed with "מוכן לצאת".
  */
 
 /** Below this many recorded trips there is not enough signal to suggest anything. */

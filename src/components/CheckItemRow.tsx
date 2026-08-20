@@ -1,12 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import {
-  Animated,
-  Easing,
-  StyleProp,
-  StyleSheet,
-  View,
-  ViewStyle,
-} from 'react-native';
+import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { runSafely } from '../animate';
 import { colors, radius, row, shadow, space } from '../theme';
 import { Item } from '../types';
@@ -20,7 +13,6 @@ export function CheckItemRow({
   onToggle,
   onSkipPress,
   onRestore,
-  readOnly = false,
 }: {
   item: Item;
   skipped: boolean;
@@ -28,8 +20,6 @@ export function CheckItemRow({
   onToggle: () => void;
   onSkipPress: () => void;
   onRestore: () => void;
-  /** Before an exit starts the list is a preview: visible, but not tickable. */
-  readOnly?: boolean;
 }) {
   const on = item.checked && !skipped;
   const p = useRef(new Animated.Value(on ? 1 : 0)).current;
@@ -59,10 +49,6 @@ export function CheckItemRow({
     outputRange: [colors.border, colors.success],
   });
 
-  // In read-only mode the body is a plain View (nothing to press) and the
-  // "לא צריך הפעם" control is hidden — that choice belongs to an active exit.
-  const Body = readOnly ? ReadOnlyBody : Squish;
-
   // The row body and the "לא צריך הפעם" control are siblings, not nested.
   return (
     <FadeIn delay={index * 45}>
@@ -73,10 +59,9 @@ export function CheckItemRow({
           shadow.soft,
           on && styles.cardOn,
           skipped && styles.cardSkipped,
-          readOnly && styles.cardReadOnly,
         ]}
       >
-        <Body
+        <Squish
           onPress={skipped ? onRestore : onToggle}
           scaleTo={0.985}
           style={{ flex: 1 }}
@@ -115,9 +100,8 @@ export function CheckItemRow({
               ) : null}
             </View>
           </View>
-        </Body>
+        </Squish>
 
-        {readOnly ? null : (
         <Squish
           onPress={skipped ? onRestore : onSkipPress}
           scaleTo={0.9}
@@ -134,24 +118,9 @@ export function CheckItemRow({
             </Txt>
           </View>
         </Squish>
-        )}
       </View>
     </FadeIn>
   );
-}
-
-/** Same shape as Squish so it can stand in for it, but inert. */
-function ReadOnlyBody({
-  style,
-  children,
-}: {
-  onPress?: () => void;
-  scaleTo?: number;
-  style?: StyleProp<ViewStyle>;
-  accessibilityLabel?: string;
-  children: React.ReactNode;
-}) {
-  return <View style={style}>{children}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -170,9 +139,6 @@ const styles = StyleSheet.create({
   cardSkipped: {
     backgroundColor: colors.surfaceSoft,
     borderColor: colors.border,
-  },
-  cardReadOnly: {
-    backgroundColor: colors.surfaceSoft,
   },
   box: {
     width: 34,

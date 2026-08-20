@@ -1,12 +1,13 @@
 import { Destination } from './types';
 
 /**
- * Local understanding of free text — no external service, no API key, no
- * network. Everything below runs on the device.
+ * The on-device matcher: free text in, an activity out. No network, no API key,
+ * no service — everything below runs on the phone.
  *
- * `analyzeUserText` is the single seam: swapping it for a Gemini (or any other)
- * call means replacing that one function and returning the same shape. Nothing
- * else in the app talks to the matcher directly.
+ * This file is the *engine*, not the seam. The seam moved to `src/ai`, where a
+ * provider layer decides who does the understanding and falls back to this when
+ * nobody else can. `localAnalysis` below is what that layer calls, so the
+ * keyword logic lives in exactly one place and is not duplicated anywhere.
  */
 
 export type SuggestedThing = { emoji: string; name: string };
@@ -454,16 +455,22 @@ function pickDestination(category: Category, destinations: Destination[]): Desti
   return { kind: 'new', name: category.destinationName, icon: category.emoji };
 }
 
-/* ---------------------------------------------------------------- the seam --- */
+/* ------------------------------------------------------------- the matcher --- */
+
+/** The strongest raw score a sentence can realistically reach. */
+export const MAX_MATCH_SCORE = 6;
+
+/** The threshold, exported so the provider layer reports the same verdict. */
+export { CONFIDENCE_THRESHOLD };
 
 /**
- * Async on purpose: a real model call will be too, so replacing the body later
- * needs no changes at the call site.
+ * What the keyword engine makes of a sentence. Synchronous and pure — the
+ * provider layer wraps it in the async contract, so this stays a plain function
+ * that is trivial to test.
+ *
+ * Returns `understood: false` rather than guessing whenever the signal is weak.
  */
-export async function analyzeUserText(
-  text: string,
-  context: AnalysisContext,
-): Promise<Analysis> {
+export function localAnalysis(text: string, context: AnalysisContext): Analysis {
   const trimmed = text.trim();
   if (!trimmed) return { understood: false, text: trimmed };
 

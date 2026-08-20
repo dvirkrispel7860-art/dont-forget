@@ -10,6 +10,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { activeProvider, isRemoteConfigured } from '../ai';
 import { Analysis, DestinationTarget } from '../aiAnalysis';
 import { runSafely, useNative } from '../animate';
 import { colors, contentMaxWidth, radius, row, shadow, space } from '../theme';
@@ -128,11 +129,12 @@ export function AiSuggestionSheet({
                 <View style={row}>
                   <Txt style={styles.brain}>🤔</Txt>
                   <Txt variant="h2" style={{ marginHorizontal: space(2) }}>
-                    לא בטוח שהבנתי
+                    לא בטוח שהבנתי. למה התכוונת?
                   </Txt>
                 </View>
                 <Txt variant="body" color={colors.textSoft} style={{ marginTop: space(3.5) }}>
-                  נסה לכתוב לאן אתה הולך — למשל “אני הולך לים” או “יש לי אימון כדורגל”.
+                  נסה לכתוב לאן אתה יוצא ומה חשוב לקחת — למשל “אני הולך לים” או “אימון
+                  כדורגל וצריך לקחת נעליים ובקבוק מים”.
                 </Txt>
                 <Button
                   label="נסה שוב"
@@ -150,8 +152,11 @@ export function AiSuggestionSheet({
                     </Txt>
                   </View>
 
+                  {/* Who actually answered. Reads from the provider layer, so it
+                      stays true the day a real model is connected. */}
                   <Txt variant="caption" color={colors.textFaint} style={{ marginTop: space(2) }}>
-                    ניתוח מקומי במכשיר — בלי שירות חיצוני.
+                    {activeProvider().label}
+                    {isRemoteConfigured() ? '.' : ' — בלי שירות חיצוני.'}
                   </Txt>
 
                   {/* What the app understood. */}
@@ -211,7 +216,7 @@ export function AiSuggestionSheet({
                   >
                     {understood.destination.kind === 'existing'
                       ? 'לאיזה יעד להוסיף?'
-                      : 'אין יעד מתאים — ליצור אחד?'}
+                      : 'לא מצאתי יעד בשם הזה. ליצור יעד חדש?'}
                   </Txt>
 
                   <View style={styles.chips}>

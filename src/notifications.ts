@@ -1,18 +1,25 @@
 import { Platform } from 'react-native';
+import { nativeNotifications } from './nativeNotifications';
 import { transit } from './transit';
 import { Destination, Reminder } from './types';
 
 /**
- * Departure reminders, delivered locally.
+ * Departure reminders, delivered locally. No push server, no API key.
  *
- * No external notification service, no push server, no API key. On web the
- * browser's own Notification API is used, and the service worker we already
- * ship displays the notification and handles the click.
+ * One system, two channels behind the same `NotificationChannel` seam:
  *
- * Honest limitation: a locally scheduled reminder can only fire while the app is
- * running (a tab open, or the installed PWA open). Real background delivery
- * needs either Web Push (a server) or a native build with expo-notifications.
- * `NotificationChannel` below is the seam for that.
+ *   - **web** — the browser's Notification API, displayed through the service
+ *     worker we already ship (which also handles the tap). It can only fire while
+ *     the app is running: a tab open, or the installed PWA open. That limit is
+ *     the browser's, and the UI says so rather than pretending otherwise.
+ *   - **native** — `expo-notifications`, which hands the schedule to the
+ *     operating system. Those arrive with the app backgrounded or killed,
+ *     because iOS/Android hold them, not us.
+ *
+ * `canSchedule` is what tells the two apart, and it is the only thing callers
+ * need to branch on: a channel that can schedule gets the timetable handed over
+ * once (see notificationSchedule.ts); one that cannot is driven by the in-page
+ * clock in useReminders.ts.
  */
 
 export type PermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
@@ -27,10 +34,29 @@ export type NotificationContent = {
   tag: string;
 };
 
+/** When a scheduled notification should fire. */
+export type NotificationTrigger =
+  /** Once, at a moment. */
+  | { kind: 'date'; at: number }
+  /** Every week on this weekday (0 = Sunday, matching `Reminder.days`). */
+  | { kind: 'weekly'; day: number; hour: number; minute: number }
+  /** After a number of seconds — used only by the internal build check. */
+  | { kind: 'seconds'; seconds: number };
+
+export type ScheduleRequest = {
+  /**
+   * A deterministic id, so the app can recognise its own scheduled work after a
+   * restart and cancel or replace it instead of piling up duplicates.
+   */
+  id: string;
+  content: NotificationContent;
+  trigger: NotificationTrigger;
+};
+
 /* ------------------------------------------------------------- permission --- */
 
-export function permissionState(): PermissionState {
-  if (Platform.OS !== 'web') return 'unsupported';
+/** The browser's answer, read synchronously. Web only. */
+function webPermission(): PermissionState {
   if (typeof window === 'undefined' || typeof Notification === 'undefined') {
     return 'unsupported';
   }
@@ -39,15 +65,58 @@ export function permissionState(): PermissionState {
   return 'default';
 }
 
+/**
+ * The native permission last read, so `permissionState()` can stay synchronous
+ * for the callers that need it in a render or a tick. Refreshed by
+ * `notificationPermission()`, which useReminders and the settings screen call on
+ * startup. Before the first read it says 'default' — "not asked yet" — never
+ * 'unsupported', which would be a lie on a platform that supports this fully.
+ */
+let lastNativePermission: PermissionState = 'default';
+
+/**
+ * The permission as it is known right now, without prompting and without
+ * awaiting. On web this is exact; on native it is the value from the most recent
+ * `notificationPermission()`. Prefer that async one when accuracy matters.
+ */
+export function permissionState(): PermissionState {
+  if (Platform.OS === 'web') return webPermission();
+  return nativeNotifications ? lastNativePermission : 'unsupported';
+}
+
+/** The real permission, asked of the platform. Never prompts. */
+export async function notificationPermission(): Promise<PermissionState> {
+  const channel = notificationChannel;
+  if (!channel) return 'unsupported';
+  const state = await channel.permission();
+  if (Platform.OS !== 'web') lastNativePermission = state;
+  return state;
+}
+
+/**
+ * Asks for the permission, prompting where the platform allows it. Tie this to a
+ * user action — both platforms expect the prompt to follow a tap.
+ */
 export async function requestPermission(): Promise<PermissionState> {
-  if (permissionState() === 'unsupported') return 'unsupported';
-  try {
-    const result = await Notification.requestPermission();
-    if (result === 'granted' || result === 'denied') return result;
-    return 'default';
-  } catch {
-    return permissionState();
-  }
+  const channel = notificationChannel;
+  if (!channel) return 'unsupported';
+  const state = await channel.request();
+  if (Platform.OS !== 'web') lastNativePermission = state;
+  return state;
+}
+
+/**
+ * Sends the user to the OS notification settings. Only a phone has such a place;
+ * on web the permission lives in the browser's own site settings, which the app
+ * cannot open, so this reports false and the UI explains the manual route.
+ */
+export function canOpenNotificationSettings(): boolean {
+  return notificationChannel?.openSettings != null;
+}
+
+export async function openNotificationSettings(): Promise<boolean> {
+  const open = notificationChannel?.openSettings;
+  return open ? open() : false;
 }
 
 /* ----------------------------------------------------------------- timing --- */
@@ -123,6 +192,41 @@ export function reminderContent(destination: Destination): NotificationContent {
 }
 
 /**
+ * "צא עכשיו" for a bus departure — the builder the leave-time reminder uses.
+ *
+ * This is the seam described above, filled in: a second builder returning the
+ * same `NotificationContent`, so scheduling and delivery are untouched. Every
+ * value in the sentence is handed in by the caller from the timetable option it
+ * is already showing — this function looks nothing up and rounds nothing off.
+ */
+export function leaveNowContent(
+  destination: Destination,
+  ride: {
+    lineNumber: string;
+    stopName: string;
+    /** The bus's departure, epoch millis, as the timetable gives it. */
+    departureAt: number;
+    /** Walking minutes to the stop, as shown on the card. */
+    walkMinutes: number;
+  },
+): NotificationContent {
+  const departure = new Date(ride.departureAt).toLocaleTimeString('he-IL', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  return {
+    title: '🚀 זמן לצאת',
+    body:
+      `קו ${ride.lineNumber} יוצא מ"${ride.stopName}" ב-${departure} ` +
+      `ל"${destination.name}" — כ-${ride.walkMinutes} דק׳ הליכה מכאן.`,
+    url: `/destination/${destination.id}/check`,
+    // Its own tag, so it never collapses onto the daily "מתכוננים לצאת" reminder.
+    tag: `leave:${destination.id}`,
+  };
+}
+
+/**
  * Adds the real bus journey to a reminder when the destination travels by bus.
  *
  * Only ever uses what the timetable returns — if the lookup finds nothing or
@@ -177,17 +281,55 @@ export async function buildReminder(
 /* --------------------------------------------------------------- delivery --- */
 
 export type NotificationChannel = {
+  /** Shows a notification now. */
   deliver: (content: NotificationContent) => Promise<boolean>;
+  /** Reads the permission. Never prompts. */
+  permission: () => Promise<PermissionState>;
+  /** Asks for the permission, prompting where the platform allows it. */
+  request: () => Promise<PermissionState>;
+  /**
+   * True when the operating system will hold a schedule for us — and therefore
+   * when a reminder arrives with the app backgrounded or killed. False means the
+   * app itself has to be running at the moment, which is what the in-page clock
+   * in useReminders.ts is for.
+   */
+  canSchedule: boolean;
+  /** Hands one notification to the OS. Returns its id, or null if it failed. */
+  schedule?: (request: ScheduleRequest) => Promise<string | null>;
+  cancel?: (id: string) => Promise<void>;
+  /** Ids of everything this app currently has scheduled with the OS. */
+  scheduled?: () => Promise<string[]>;
+  /** Opens the OS notification settings for this app, where there are any. */
+  openSettings?: () => Promise<boolean>;
 };
 
 /**
  * Web delivery. Prefers the service worker so the notification still appears
  * when the tab is in the background, and so tapping it can focus/open the app
  * at the right destination (see the notificationclick handler in public/sw.js).
+ *
+ * No `schedule`: a browser has nowhere to leave a future notification without a
+ * push server, so `canSchedule` is false and the app keeps its in-page clock —
+ * unchanged, and with the same honest limitation as before.
  */
 export const webChannel: NotificationChannel = {
+  canSchedule: false,
+
+  permission: async () => webPermission(),
+
+  request: async () => {
+    if (webPermission() === 'unsupported') return 'unsupported';
+    try {
+      const result = await Notification.requestPermission();
+      if (result === 'granted' || result === 'denied') return result;
+      return 'default';
+    } catch {
+      return webPermission();
+    }
+  },
+
   deliver: async (content) => {
-    if (permissionState() !== 'granted') return false;
+    if (webPermission() !== 'granted') return false;
 
     try {
       const registration = await navigator.serviceWorker?.getRegistration?.();
@@ -219,6 +361,13 @@ export const webChannel: NotificationChannel = {
   },
 };
 
-/** Chosen per platform. Native builds would supply an expo-notifications channel. */
+/**
+ * The channel for this platform.
+ *
+ * `nativeNotifications` resolves to the real expo-notifications channel on a
+ * phone and to null everywhere else — the two files behind that import are
+ * platform-selected by the bundler, which is what keeps expo-notifications out
+ * of the web bundle entirely.
+ */
 export const notificationChannel: NotificationChannel | null =
-  Platform.OS === 'web' ? webChannel : null;
+  Platform.OS === 'web' ? webChannel : nativeNotifications;

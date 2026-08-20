@@ -48,9 +48,13 @@ type StrideRideStop = {
   stop_sequence: number;
   gtfs_stop__code: number;
   gtfs_stop__name: string;
+  gtfs_stop__lat: number | null;
+  gtfs_stop__lon: number | null;
   gtfs_route__route_short_name: string | null;
   gtfs_route__route_long_name: string | null;
   gtfs_route__agency_name: string | null;
+  gtfs_route__line_ref: number | null;
+  gtfs_route__operator_ref: number | null;
 };
 
 function isoDate(date: Date): string {
@@ -325,6 +329,12 @@ export const strideProvider: TransitProvider = {
         alightStopCode: arrival.gtfs_stop__code,
         arrival: arrival.arrival_time,
         scheduleDate: date,
+        // Already in the rows we fetched — carrying it costs nothing and is what
+        // lets the live lookup ask about this exact line.
+        lineRef: departure.gtfs_route__line_ref ?? undefined,
+        operatorRef: departure.gtfs_route__operator_ref ?? undefined,
+        boardStopLat: departure.gtfs_stop__lat ?? undefined,
+        boardStopLon: departure.gtfs_stop__lon ?? undefined,
       });
     }
 
@@ -346,14 +356,29 @@ export const strideProvider: TransitProvider = {
    * Live positions. The source exposes SIRI snapshots, but a useful answer needs
    * a ride already under way, so this reports honestly when it has nothing
    * rather than guessing.
+   *
+   * Identity matters more than it looks here. Live reports are keyed by the
+   * feed's `line_ref`, not by the number painted on the bus: dozens of unrelated
+   * lines across the country are called "54". Asking by the published number
+   * returns strangers' buses, so without a `lineRef` this reports nothing at all
+   * rather than something wrong.
    */
   async getRealtimeTransitData(
     request: RealtimeRequest,
     options,
   ): Promise<RealtimeResult> {
+    if (request.lineRef == null) {
+      return { available: false, reason: 'אין מזהה קו לבדיקת זמן אמת' };
+    }
+
     try {
       const rows = await getJson<
-        { lat: number; lon: number; recorded_at_time: string }[]
+        {
+          lat: number;
+          lon: number;
+          recorded_at_time: string;
+          siri_route__line_ref: number | null;
+        }[]
       >(
         '/siri_vehicle_locations/list',
         {
@@ -361,17 +386,26 @@ export const strideProvider: TransitProvider = {
           limit: 20,
           recorded_at_time_from: new Date(Date.now() - 10 * 60_000).toISOString(),
           recorded_at_time_to: new Date().toISOString(),
-          siri_routes__line_refs: request.lineNumber,
+          // Singular: the plural spelling is not a parameter this API knows, and
+          // an unknown filter is ignored silently — which returns every line.
+          siri_routes__line_ref: request.lineRef,
+          ...(request.operatorRef != null
+            ? { siri_routes__operator_ref: request.operatorRef }
+            : {}),
         },
         options?.signal,
       );
 
       /*
-       * The source does not honour the recorded_at_time filters, so freshness is
-       * enforced here: stale positions must never be presented as live.
+       * The source does not honour the recorded_at_time filters, and a filter it
+       * does not recognise it drops entirely, so both conditions are enforced
+       * here: a position is used only when it is fresh *and* provably this line's.
+       * Stale or foreign positions must never be presented as live.
        */
       const cutoff = Date.now() - FRESH_REALTIME_MINUTES * 60_000;
       const fresh = (Array.isArray(rows) ? rows : []).filter((row) => {
+        if (row.siri_route__line_ref !== request.lineRef) return false;
+        if (typeof row.lat !== 'number' || typeof row.lon !== 'number') return false;
         const at = new Date(row.recorded_at_time).getTime();
         return Number.isFinite(at) && at >= cutoff;
       });

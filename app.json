@@ -38,6 +38,29 @@
       "orientation": "portrait",
       "lang": "he"
     },
-    "plugins": ["expo-router"]
+    "plugins": [
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#4B5BF5",
+          "defaultChannel": "departures",
+          "enableBackgroundRemoteNotifications": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "כדי למצוא תחנת אוטובוס קרובה אליך ולסמן את מיקום היעד, האפליקציה צריכה את המיקום שלך. המיקום נשאר במכשיר ולא נשלח לשום מקום.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false,
+          "motionUsagePermission": false,
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ]
+    ]
   }
 }

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, TextInput, View } from 'react-native';
 import { useNative } from '../animate';
-import { isSpeechAvailable } from '../speech';
 import { colors, radius, row, rtlText, shadow, space } from '../theme';
 import { Squish, Txt } from './ui';
 
@@ -17,6 +16,7 @@ export function AiComposer({
   listening,
   onToggleMic,
   analyzing = false,
+  notice = null,
 }: {
   value: string;
   onChangeText: (text: string) => void;
@@ -25,6 +25,11 @@ export function AiComposer({
   onToggleMic: () => void;
   /** Shown in the existing title slot; matters once a real model is wired in. */
   analyzing?: boolean;
+  /**
+   * Something the user needs to know about dictation — no permission, no engine
+   * on this device, nothing heard. Takes the caption slot under the box.
+   */
+  notice?: string | null;
 }) {
   const canSend = value.trim().length > 0 && !analyzing;
 
@@ -126,11 +131,15 @@ export function AiComposer({
         </Squish>
       </View>
 
-      {listening ? (
+      {/* A notice outlives the listening state (a refused permission has to stay
+          readable), so it wins the slot. */}
+      {notice ? (
+        <Txt variant="caption" color={colors.textSoft} style={{ marginTop: space(2) }}>
+          {notice}
+        </Txt>
+      ) : listening ? (
         <Txt variant="caption" color={colors.textFaint} style={{ marginTop: space(2) }}>
-          {isSpeechAvailable()
-            ? 'דבר עכשיו...'
-            : 'זיהוי דיבור עוד לא מחובר — אפשר להקליד בינתיים.'}
+          דבר עכשיו... הטקסט ייכנס לתיבה
         </Txt>
       ) : null}
     </View>

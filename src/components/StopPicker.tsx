@@ -3,7 +3,6 @@ import {
   Animated,
   Easing,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +12,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { runSafely, useNative } from '../animate';
+import { getCurrentLocation, locationErrorMessage } from '../location';
 import { colors, contentMaxWidth, radius, row, rtlText, shadow, space } from '../theme';
 import { transit } from '../transit';
 import { TransitStop, TransitStopRef } from '../transit/types';
@@ -23,7 +23,8 @@ import { Button, Squish, Txt } from './ui';
  * from the user.
  *
  * Location is only ever requested when the user taps "מצא תחנות קרובות אליי" —
- * never on open, and never in the background.
+ * never on open, and never in the background. It comes from `src/location.ts`, so
+ * this works in the browser and in a native build alike.
  */
 export function StopPicker({
   visible,
@@ -100,44 +101,38 @@ export function StopPicker({
     return () => clearTimeout(timer);
   }, [query, visible]);
 
-  const findNearby = () => {
-    if (Platform.OS !== 'web' || typeof navigator === 'undefined' || !navigator.geolocation) {
-      setStatus('המכשיר הזה לא מאפשר איתור מיקום.');
+  const findNearby = async () => {
+    setBusy(true);
+    setStatus('מבקש את המיקום שלך...');
+    const id = ++requestId.current;
+
+    const located = await getCurrentLocation();
+    if (requestId.current !== id) return;
+
+    if (located.status === 'error') {
+      setBusy(false);
+      // The real reason, not "no permission" for all five of them.
+      setStatus(`${locationErrorMessage(located.reason)} אפשר לחפש תחנה לפי שם.`);
       return;
     }
 
-    setBusy(true);
-    setStatus('מבקש הרשאת מיקום...');
-    const id = ++requestId.current;
-
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        if (requestId.current !== id) return;
-        setStatus('מחפש תחנות קרובות...');
-        try {
-          const found = await transit.getNearbyStops(
-            position.coords.latitude,
-            position.coords.longitude,
-            { limit: 15 },
-          );
-          if (requestId.current !== id) return;
-          setResults(found);
-          setStatus(found.length === 0 ? 'לא נמצאו תחנות קרובות' : null);
-        } catch {
-          if (requestId.current === id) {
-            setStatus('לא הצלחנו לטעון את רשימת התחנות. בדוק חיבור לאינטרנט.');
-          }
-        } finally {
-          if (requestId.current === id) setBusy(false);
-        }
-      },
-      () => {
-        if (requestId.current !== id) return;
-        setBusy(false);
-        setStatus('לא קיבלנו הרשאת מיקום. אפשר לחפש תחנה לפי שם.');
-      },
-      { timeout: 15000, maximumAge: 60000 },
-    );
+    setStatus('מחפש תחנות קרובות...');
+    try {
+      const found = await transit.getNearbyStops(
+        located.location.latitude,
+        located.location.longitude,
+        { limit: 15 },
+      );
+      if (requestId.current !== id) return;
+      setResults(found);
+      setStatus(found.length === 0 ? 'לא נמצאו תחנות קרובות' : null);
+    } catch {
+      if (requestId.current === id) {
+        setStatus('לא הצלחנו לטעון את רשימת התחנות. בדוק חיבור לאינטרנט.');
+      }
+    } finally {
+      if (requestId.current === id) setBusy(false);
+    }
   };
 
   return (

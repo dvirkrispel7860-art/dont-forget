@@ -54,6 +54,20 @@ export type TransitOption = {
   arrival: string;
   /** The schedule date the answer came from — may lag today by a day or two. */
   scheduleDate: string;
+  /**
+   * The line's internal reference in the national feed.
+   *
+   * Not for display — this is the id live vehicle reports are keyed by. The
+   * published number ("54") is shared by many unrelated lines around the
+   * country, so asking for live data by that number returns other people's
+   * buses; this is what makes a live lookup point at *this* line.
+   */
+  lineRef?: number;
+  /** Operator reference in the same feed, used to narrow a live lookup. */
+  operatorRef?: number;
+  /** Boarding stop position, when the feed reported it. */
+  boardStopLat?: number;
+  boardStopLon?: number;
 };
 
 export type TransitOptionsRequest = {
@@ -83,4 +97,13 @@ export type RealtimeVehicle = {
 export type RealtimeRequest = {
   lineNumber: string;
   originCode: number;
+  /**
+   * The line's feed reference, from the timetable option this request is about.
+   *
+   * Without it there is no way to ask the live feed about one specific line, so
+   * the provider reports "no live data" instead of returning vehicles that
+   * belong to some other line with the same published number.
+   */
+  lineRef?: number;
+  operatorRef?: number;
 };

@@ -12,12 +12,25 @@ import {
 import { Sheet } from '../src/components/Sheet';
 import { Button, FadeIn, Screen, ScreenHeader, Txt } from '../src/components/ui';
 import {
+  canOpenLocationSettings,
+  getLocationPermissionStatus,
+  locationPermissionLabel,
+  openLocationSettings,
+  requestLocationPermission,
+  type LocationPermission,
+} from '../src/location';
+import {
+  canOpenNotificationSettings,
+  notificationPermission,
+  openNotificationSettings,
   permissionState,
   requestPermission,
   type PermissionState,
 } from '../src/notifications';
 import { useStore } from '../src/store';
 import { colors, radius, row, rtlText, shadow, space } from '../src/theme';
+import { transit } from '../src/transit';
+import { weather } from '../src/weather';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -68,10 +81,42 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { settings, updateSettings, destinations, trips, clearEverything } = useStore();
   const [confirmClear, setConfirmClear] = useState(false);
-  const [permission, setPermission] = useState<PermissionState>('unsupported');
+  const [permission, setPermission] = useState<PermissionState>(() => permissionState());
+  const [locationPermission, setLocationPermission] = useState<LocationPermission>('unknown');
 
-  // Read the browser's current answer on mount; it can change outside the app.
-  useEffect(() => setPermission(permissionState()), []);
+  /*
+   * The platform's current answer, asked properly. It can change outside the app
+   * — in browser site settings or in the OS notification settings — so it is read
+   * on mount rather than assumed, and asking never prompts.
+   */
+  useEffect(() => {
+    let alive = true;
+    void notificationPermission().then((next) => {
+      if (alive) setPermission(next);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /*
+   * Reading the location permission never prompts — it only reports. The prompt
+   * belongs to the button below, and to the features that actually need a
+   * location.
+   */
+  useEffect(() => {
+    let alive = true;
+    void getLocationPermissionStatus().then((status) => {
+      if (alive) setLocationPermission(status);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const onAskLocation = async () => {
+    setLocationPermission(await requestLocationPermission());
+  };
 
   const onAskPermission = async () => {
     const next = await requestPermission();
@@ -85,7 +130,8 @@ export default function SettingsScreen() {
    */
   const onToggleNotifications = async (notifications: boolean) => {
     updateSettings({ notifications });
-    if (notifications && permissionState() === 'default') {
+    if (!notifications) return;
+    if ((await notificationPermission()) === 'default') {
       setPermission(await requestPermission());
     }
   };
@@ -140,26 +186,43 @@ export default function SettingsScreen() {
                 }
                 value={settings.notifications}
                 onChange={onToggleNotifications}
-                last={permission === 'granted' || permission === 'unsupported'}
+                last={permission === 'unsupported'}
               />
 
+              {/* Where the permission lives differs by platform: a phone has OS
+                  settings the app can open, a browser has site settings it
+                  cannot. The wording follows that, so the instructions are
+                  always the ones that actually work here. */}
               {permission === 'denied' ? (
                 <View style={styles.rowItem}>
                   <Txt variant="body" color={colors.danger}>
-                    ⚠️ ההתראות חסומות בדפדפן
+                    {canOpenNotificationSettings()
+                      ? '⚠️ ההתראות חסומות בהגדרות המכשיר'
+                      : '⚠️ ההתראות חסומות בדפדפן'}
                   </Txt>
                   <Txt variant="caption" color={colors.textSoft} style={{ marginTop: space(2) }}>
-                    הדפדפן חוסם התראות לאתר הזה, ולכן אי אפשר לבקש שוב מתוך האפליקציה.
-                    כדי לאפשר: לחץ על סמל המנעול שליד הכתובת → הרשאות → התראות → אפשר,
-                    ואז רענן את הדף.
+                    {canOpenNotificationSettings()
+                      ? 'אישרת בעבר "לא" להתראות, ולכן אי אפשר לבקש שוב מתוך האפליקציה. אפשר לאשר אותן בהגדרות המכשיר ואז לחזור לכאן.'
+                      : 'הדפדפן חוסם התראות לאתר הזה, ולכן אי אפשר לבקש שוב מתוך האפליקציה. כדי לאפשר: לחץ על סמל המנעול שליד הכתובת → הרשאות → התראות → אפשר, ואז רענן את הדף.'}
                   </Txt>
+                  {canOpenNotificationSettings() ? (
+                    <Button
+                      label="פתח הגדרות מערכת"
+                      variant="soft"
+                      size="md"
+                      onPress={openNotificationSettings}
+                      style={{ marginTop: space(3), alignSelf: 'stretch' }}
+                    />
+                  ) : null}
                 </View>
               ) : null}
 
               {permission === 'default' ? (
                 <View style={styles.rowItem}>
                   <Txt variant="caption" color={colors.textSoft}>
-                    כדי לקבל תזכורות צריך לאשר התראות בדפדפן.
+                    {canOpenNotificationSettings()
+                      ? 'כדי לקבל תזכורות צריך לאשר התראות במכשיר.'
+                      : 'כדי לקבל תזכורות צריך לאשר התראות בדפדפן.'}
                   </Txt>
                   <Button
                     label="אפשר התראות"
@@ -178,22 +241,122 @@ export default function SettingsScreen() {
                   </Txt>
                 </View>
               ) : null}
+
+              {/* What the platform can actually promise. On a phone the OS holds
+                  the schedule; a browser cannot, and that limit stays visible. */}
+              {permission === 'granted' ? (
+                <View style={styles.rowItem}>
+                  <Txt variant="caption" color={colors.textFaint}>
+                    {canOpenNotificationSettings()
+                      ? 'התזכורות שמורות אצל מערכת ההפעלה, ולכן הן יגיעו גם כשהאפליקציה סגורה.'
+                      : 'בדפדפן ההתראות נשלחות רק כשהאפליקציה פתוחה. אם היא סגורה, התזכורת לא תישלח.'}
+                  </Txt>
+                </View>
+              ) : null}
             </Section>
           </FadeIn>
 
-          <FadeIn delay={160}>
-            <Section title="הגדרות ניווט">
-              <View style={[row, styles.rowItem, styles.divider]}>
-                <Txt variant="body" style={{ flex: 1 }}>
-                  אפליקציית ניווט
+          {/* The location itself is only ever asked for by the feature that needs
+              it. This section reports where things stand and offers a way out of a
+              refusal — it does not read the location. */}
+          <FadeIn delay={140}>
+            <Section title="📍 הרשאת מיקום">
+              <View
+                style={[
+                  styles.rowItem,
+                  // Nothing follows once it is granted — no dangling line.
+                  locationPermission !== 'granted' && styles.divider,
+                ]}
+              >
+                <View style={row}>
+                  <Txt variant="body" style={{ flex: 1 }}>
+                    מצב ההרשאה
+                  </Txt>
+                  <Txt
+                    variant="body"
+                    color={
+                      locationPermission === 'granted'
+                        ? colors.accentDeep
+                        : locationPermission === 'denied'
+                          ? colors.danger
+                          : colors.textSoft
+                    }
+                  >
+                    {locationPermissionLabel(locationPermission)}
+                  </Txt>
+                </View>
+                <Txt variant="caption" color={colors.textFaint} style={{ marginTop: space(2) }}>
+                  המיקום משמש למצוא תחנת אוטובוס קרובה אליך ולסמן מיקום ליעד. הוא
+                  נקרא רק כשפיצ׳ר צריך אותו, לא נשלח לשום שרת, ולא נשמרת היסטוריית
+                  מיקומים.
                 </Txt>
-                <Txt variant="body" color={colors.textSoft}>
-                  Waze
+              </View>
+
+              {locationPermission === 'unknown' ? (
+                <View style={styles.rowItem}>
+                  <Txt variant="caption" color={colors.textSoft}>
+                    עוד לא ביקשנו מיקום. אפשר לאשר כאן מראש, או להשאיר — נבקש כשצריך.
+                  </Txt>
+                  <Button
+                    label="אפשר מיקום"
+                    variant="soft"
+                    size="md"
+                    onPress={onAskLocation}
+                    style={{ marginTop: space(3), alignSelf: 'stretch' }}
+                  />
+                </View>
+              ) : null}
+
+              {locationPermission === 'denied' ? (
+                <View style={styles.rowItem}>
+                  <Txt variant="caption" color={colors.textSoft}>
+                    {canOpenLocationSettings()
+                      ? 'ההרשאה נדחתה. אפשר לאשר אותה בהגדרות המכשיר ואז לנסות שוב.'
+                      : 'הדפדפן חוסם מיקום לאתר הזה. לחץ על סמל המנעול שליד הכתובת → הרשאות → מיקום → אפשר, ואז נסה שוב.'}
+                  </Txt>
+                  <Button
+                    label="נסה שוב"
+                    variant="soft"
+                    size="md"
+                    onPress={onAskLocation}
+                    style={{ marginTop: space(3), alignSelf: 'stretch' }}
+                  />
+                  {canOpenLocationSettings() ? (
+                    <Button
+                      label="פתח הגדרות מערכת"
+                      variant="ghost"
+                      size="md"
+                      onPress={openLocationSettings}
+                      style={{ marginTop: space(2), alignSelf: 'stretch' }}
+                    />
+                  ) : null}
+                </View>
+              ) : null}
+
+              {locationPermission === 'unavailable' ? (
+                <View style={styles.rowItem}>
+                  <Txt variant="caption" color={colors.textFaint}>
+                    המכשיר או הדפדפן הזה לא מאפשר איתור מיקום. אפשר לבחור תחנה בעצמך
+                    בכל מקום שבו צריך אחת.
+                  </Txt>
+                </View>
+              ) : null}
+            </Section>
+          </FadeIn>
+
+          <FadeIn delay={180}>
+            <Section title="הגדרות ניווט">
+              {/* Which app opens is decided by the destination's travel mode. */}
+              <View style={[styles.rowItem, styles.divider]}>
+                <Txt variant="body">אפליקציית ניווט</Txt>
+                <Txt variant="caption" color={colors.textSoft} style={{ marginTop: 3 }}>
+                  🚗 רכב: Waze · 🚶 הליכה ו‑🚲 אופניים: Google Maps · 🚌 אוטובוס: פרטי
+                  הנסיעה באפליקציה
                 </Txt>
               </View>
               <SwitchRow
                 label="פתח ניווט אוטומטית"
-                hint='כשתלחץ "סיימתי את היציאה", Waze ייפתח עם הכתובת.'
+                hint='כשתלחץ "מוכן לצאת", אפליקציית הניווט של היעד תיפתח עם המיקום.'
                 value={settings.autoOpenWaze}
                 onChange={(autoOpenWaze) => updateSettings({ autoOpenWaze })}
                 last
@@ -201,7 +364,27 @@ export default function SettingsScreen() {
             </Section>
           </FadeIn>
 
-          <FadeIn delay={210}>
+          {/* Both sources are free, keyless and credited here as their licences
+              ask (Open-Meteo is CC-BY 4.0). */}
+          <FadeIn delay={200}>
+            <Section title="מקורות המידע">
+              <View style={[styles.rowItem, styles.divider]}>
+                <Txt variant="body">🌦️ מזג אוויר</Txt>
+                <Txt variant="caption" color={colors.textSoft} style={{ marginTop: 3 }}>
+                  {weather.sourceLabel} · {weather.sourceUrl.replace('https://', '')} ·
+                  רישיון CC-BY 4.0
+                </Txt>
+              </View>
+              <View style={styles.rowItem}>
+                <Txt variant="body">🚌 תחבורה ציבורית</Txt>
+                <Txt variant="caption" color={colors.textSoft} style={{ marginTop: 3 }}>
+                  {transit.sourceLabel}
+                </Txt>
+              </View>
+            </Section>
+          </FadeIn>
+
+          <FadeIn delay={250}>
             <Section title="נתונים">
               <View style={styles.rowItem}>
                 <Txt variant="caption" color={colors.textFaint}>

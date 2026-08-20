@@ -68,7 +68,7 @@ function EmptyState() {
           color={colors.textSoft}
           style={{ marginTop: space(2), maxWidth: 290 }}
         >
-          כל פעם שתסיים בדיקת יציאה ותלחץ "אני יוצא", היציאה תופיע כאן.
+          כל פעם שתסיים יציאה ותלחץ "מוכן לצאת", היציאה תופיע כאן.
         </Txt>
       </View>
     </FadeIn>

@@ -23,12 +23,16 @@ import { normalizeItemName } from './suggestions';
 import {
   ActiveExits,
   defaultSettings,
+  DepartureModes,
+  DepartureStops,
   Destination,
   Item,
   Settings,
   SkipMap,
   Trip,
 } from './types';
+import { TransitStopRef, TravelMode } from './transit/types';
+import { resetWeatherCache } from './weather';
 
 let seq = 0;
 function newId(prefix: string) {
@@ -44,7 +48,15 @@ type State = { destinations: Destination[]; hydrated: boolean };
 export type DestinationPatch = Partial<
   Pick<
     Destination,
-    'name' | 'icon' | 'address' | 'favorite' | 'reminder' | 'travelMode' | 'transit'
+    | 'name'
+    | 'icon'
+    | 'address'
+    | 'coords'
+    | 'coordsLabel'
+    | 'favorite'
+    | 'reminder'
+    | 'travelMode'
+    | 'transit'
   >
 >;
 
@@ -168,27 +180,46 @@ type Store = {
   toggleItem: (destinationId: string, itemId: string) => void;
   removeItem: (destinationId: string, itemId: string) => void;
   /*
-   * Leaving is one flow with two phases:
-   *   normal  --("🚀 אני יוצא" → startExit)-->  in-exit
-   *   in-exit --("✅ סיימתי את היציאה" → completeExit)-->  normal
-   * Exactly one of the two buttons is on screen at any time.
+   * Leaving is one screen with one button: the departure opens when the screen
+   * does, and "✅ מוכן לצאת" closes it by writing the trip to history.
    */
 
-  /** True while an exit is in progress for this destination. */
+  /** True while a departure is in progress for this destination. */
   isExiting: (destinationId: string) => boolean;
   /**
-   * When the active exit started, or undefined when there is none. Persisted
-   * with the exit itself, so "מצב יציאה" can show a real departure time even
-   * after a refresh instead of inventing one.
+   * Opens a departure: clears whatever was ticked last time and marks this
+   * destination as being on the way out. The departure screen calls it when it
+   * opens, so ticking starts from zero on a fresh visit and survives a refresh
+   * in the middle of one.
    */
-  exitStartedAt: (destinationId: string) => number | undefined;
-  /** "🚀 אני יוצא": begins a fresh exit — clears any leftover ticks. */
   startExit: (destinationId: string) => void;
   /**
-   * "✅ סיימתי את היציאה": writes the trip (destination, timestamp, every item
-   * and whether it was taken) to history, clears the ticks, and ends the exit.
+   * "✅ מוכן לצאת": writes the trip (destination, timestamp, every item and
+   * whether it was taken) to history, clears the ticks, and ends the departure.
    */
   completeExit: (destinationId: string) => void;
+
+  /*
+   * How the user is getting there *this time*.
+   *
+   * `departureMode` is the override for the departure in progress, or undefined
+   * when it follows the destination's own `travelMode`. Session only: the saved
+   * destination is never touched by it, and it is dropped when the departure
+   * starts or ends. Changing the destination itself stays an explicit action
+   * through `updateDestination`.
+   */
+  departureMode: (destinationId: string) => TravelMode | undefined;
+  setDepartureMode: (destinationId: string, mode: TravelMode) => void;
+
+  /**
+   * A boarding stop chosen by hand for this departure, or undefined when the app
+   * uses the one it found near the user. Session only, exactly like the mode: the
+   * destination's saved transit setup is left alone.
+   */
+  departureStop: (destinationId: string) => TransitStopRef | undefined;
+  setDepartureStop: (destinationId: string, stop: TransitStopRef) => void;
+  /** Back to the stop the app finds by itself. */
+  clearDepartureStop: (destinationId: string) => void;
 
   /** "רק הפעם" — session only, forgotten as soon as the trip ends. */
   skippedIds: (destinationId: string) => string[];
@@ -211,6 +242,10 @@ const StoreContext = createContext<Store | null>(null);
 export function DestinationsProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, { destinations: [], hydrated: false });
   const [skips, setSkips] = useState<SkipMap>({});
+  // The "just for this departure" travel modes. No reducer, no storage.
+  const [departureModes, setDepartureModes] = useState<DepartureModes>({});
+  // And the "just for this departure" boarding stops.
+  const [departureStops, setDepartureStops] = useState<DepartureStops>({});
   const [trips, setTrips] = useState<Trip[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [activeExits, setActiveExits] = useState<ActiveExits>({});
@@ -302,6 +337,16 @@ export function DestinationsProvider({ children }: { children: React.ReactNode }
           delete next[id];
           return next;
         });
+        setDepartureModes((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        setDepartureStops((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
         setActiveExits((prev) => {
           const next = { ...prev };
           delete next[id];
@@ -330,13 +375,24 @@ export function DestinationsProvider({ children }: { children: React.ReactNode }
       removeItem: (destinationId, itemId) =>
         dispatch({ type: 'removeItem', destinationId, itemId }),
       isExiting: (destinationId) => activeExits[destinationId] != null,
-      exitStartedAt: (destinationId) => activeExits[destinationId],
 
       startExit: (destinationId) => {
-        // A new exit always starts clean, so nothing carries over from a
-        // previous departure that was never completed.
+        // A departure always starts clean, so nothing carries over from a visit
+        // that was never finished.
         dispatch({ type: 'resetChecks', destinationId });
         setSkips((prev) => ({ ...prev, [destinationId]: [] }));
+        // A fresh departure follows the destination's own travel mode again,
+        // and looks for a stop from scratch.
+        setDepartureModes((prev) => {
+          const next = { ...prev };
+          delete next[destinationId];
+          return next;
+        });
+        setDepartureStops((prev) => {
+          const next = { ...prev };
+          delete next[destinationId];
+          return next;
+        });
         setActiveExits((prev) => ({ ...prev, [destinationId]: Date.now() }));
       },
 
@@ -366,13 +422,37 @@ export function DestinationsProvider({ children }: { children: React.ReactNode }
 
         dispatch({ type: 'resetChecks', destinationId });
         setSkips((prev) => ({ ...prev, [destinationId]: [] }));
-        // Back to the normal state: only "🚀 אני יוצא" shows again.
+        setDepartureModes((prev) => {
+          const next = { ...prev };
+          delete next[destinationId];
+          return next;
+        });
+        setDepartureStops((prev) => {
+          const next = { ...prev };
+          delete next[destinationId];
+          return next;
+        });
+        // The next visit to this destination opens a fresh departure.
         setActiveExits((prev) => {
           const next = { ...prev };
           delete next[destinationId];
           return next;
         });
       },
+
+      departureMode: (destinationId) => departureModes[destinationId],
+      setDepartureMode: (destinationId, mode) =>
+        setDepartureModes((prev) => ({ ...prev, [destinationId]: mode })),
+
+      departureStop: (destinationId) => departureStops[destinationId],
+      setDepartureStop: (destinationId, stop) =>
+        setDepartureStops((prev) => ({ ...prev, [destinationId]: stop })),
+      clearDepartureStop: (destinationId) =>
+        setDepartureStops((prev) => {
+          const next = { ...prev };
+          delete next[destinationId];
+          return next;
+        }),
 
       skippedIds: (destinationId) => skips[destinationId] ?? [],
       skipOnce: (destinationId, itemId) =>
@@ -396,7 +476,12 @@ export function DestinationsProvider({ children }: { children: React.ReactNode }
         setTrips([]);
         setSettings(defaultSettings);
         setSkips({});
+        setDepartureModes({});
+        setDepartureStops({});
         setActiveExits({});
+        // clearAllData removes the weather key; this drops the copy in memory,
+        // so "מחק את כל הנתונים" really leaves nothing behind.
+        resetWeatherCache();
         void clearAllData();
       },
     }),
@@ -404,6 +489,8 @@ export function DestinationsProvider({ children }: { children: React.ReactNode }
       state.destinations,
       state.hydrated,
       skips,
+      departureModes,
+      departureStops,
       trips,
       settings,
       activeExits,
