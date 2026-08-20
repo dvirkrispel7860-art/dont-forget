@@ -11,6 +11,12 @@ import {
   timeLeftPhrase,
   walkPhrase,
 } from '../transit/leaveTime';
+import {
+  rankMedal,
+  RouteOption,
+  totalTimePhrase,
+  transfersPhrase,
+} from '../transit/routePlanner';
 import { walkingMinutes } from '../transit/nearbyRoute';
 import { BusRoute } from '../transit/useBusRoute';
 import { TransitOption } from '../transit/types';
@@ -24,10 +30,13 @@ import { StopPicker } from './StopPicker';
  * 🚌 הדרך שלי — the stop found for the user, and the ride that made it the answer.
  *
  * The user never picks an origin stop to get here: the app takes their location,
- * looks at the stops around them, and keeps the nearest one that actually has a
- * ride to the destination (see nearbyRoute.ts). What it shows is why that stop —
- * how far it is, which line, and when it leaves — all from the official timetable,
- * with live status on top when the feed has any.
+ * turns the stops around them into whole journeys, and shows the one that gets
+ * them there soonest — walking, waiting and riding all counted (see
+ * routePlanner.ts). That is not always the nearest stop, which is the point. The
+ * other journeys it ranked are listed underneath, so the choice stays the user's.
+ *
+ * Everything shown comes from the official timetable, with live status on top
+ * when the feed has any — and only against the leg it belongs to.
  *
  * Every failure is its own sentence: no location (and which kind — refused,
  * switched off, timed out), no stops, no ride, no timetable. None of them invents
@@ -181,6 +190,40 @@ function LeaveReminderRow({
           : reminder.armed
             ? 'נזכיר לך בזמן היציאה — כל עוד האפליקציה פתוחה. אם היא סגורה, ההתראה לא תישלח.'
             : 'תזכורת חד-פעמית בזמן היציאה. עובדת רק כשהאפליקציה פתוחה.'}
+      </Txt>
+    </View>
+  );
+}
+
+/**
+ * One of the other journeys the planner ranked — 🥈 or 🥉.
+ *
+ * The numbers that decide between them: how long it takes altogether, how much
+ * of that is on foot, how many changes, and when it gets there. Same row shape as
+ * the later-rides list below, so nothing new is introduced visually.
+ */
+function AlternativeRoute({ route, rank }: { route: RouteOption; rank: number }) {
+  const lines = route.legs.map((leg) => leg.lineNumber).join(' → ');
+  const sameStop = route.legs[0].departureStop.name;
+
+  return (
+    <View style={{ gap: space(1) }}>
+      <View style={[row, styles.laterRow]}>
+        <Txt variant="caption" color={colors.textFaint}>
+          {rankMedal(rank)}
+        </Txt>
+        <View style={styles.lineBadgeSmall}>
+          <Txt variant="caption" center color={colors.accentDeep}>
+            {lines}
+          </Txt>
+        </View>
+        <Txt variant="caption" color={colors.textSoft} style={{ marginHorizontal: space(2.5) }}>
+          {totalTimePhrase(route)} · {transfersPhrase(route.transfers)}
+        </Txt>
+      </View>
+      <Txt variant="caption" color={colors.textFaint} numberOfLines={1}>
+        🚶 {route.totalWalkingMinutes} דק׳ הליכה · 🕐 {clock(route.legs[0].option.departure)} →{' '}
+        {clock(new Date(route.arrivalTime).toISOString())} · 📍 {sameStop}
       </Txt>
     </View>
   );
@@ -403,6 +446,17 @@ export function BusRouteCard({
                 {distanceLabel(found.metresFromUser)} בקו אווירי)
               </Txt>
             ) : null}
+
+            {/* The numbers the ranking was actually made on, so the user can see
+                why this journey was chosen over the others. */}
+            {found.routes.length > 0 ? (
+              <Txt variant="caption" color={colors.accentDeep}>
+                {rankMedal(0)} {totalTimePhrase(found.routes[0])} עד היעד ·{' '}
+                {transfersPhrase(found.routes[0].transfers)} ·{' '}
+                {found.routes[0].totalWalkingMinutes} דק׳ הליכה · הגעה{' '}
+                {clock(new Date(found.routes[0].arrivalTime).toISOString())}
+              </Txt>
+            ) : null}
           </View>
 
           {/* ------------------------------------------- when to leave */}
@@ -554,6 +608,20 @@ export function BusRouteCard({
               )}
             </View>
           </View>
+
+          {/* The alternatives the planner ranked — a different stop or a
+              different line, not just a later bus from the same place. Shown
+              only when there is genuinely something else to choose. */}
+          {found.routes.length > 1 ? (
+            <View style={{ marginTop: space(3), gap: space(2) }}>
+              <Txt variant="caption" color={colors.textSoft}>
+                דרכים אחרות להגיע
+              </Txt>
+              {found.routes.slice(1).map((route, index) => (
+                <AlternativeRoute key={route.id} route={route} rank={index + 1} />
+              ))}
+            </View>
+          ) : null}
 
           {found.options.length > 1 ? (
             <View style={{ marginTop: space(3), gap: space(2) }}>

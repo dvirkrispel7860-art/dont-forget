@@ -25,6 +25,7 @@
   "files": [
     "../src/location.ts",
     "../src/transit/leaveTime.ts",
+    "../src/transit/routePlanner.ts",
     "../src/notificationSchedule.ts",
     "../src/nativeNotifications.native.ts",
     "../src/ai/index.ts"

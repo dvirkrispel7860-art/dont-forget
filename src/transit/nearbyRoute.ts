@@ -1,5 +1,6 @@
 import { Coords } from '../weather/types';
 import { transit } from './index';
+import { planRoutes, RouteOption } from './routePlanner';
 import { TransitOption, TransitStop, TransitStopRef } from './types';
 
 /**
@@ -40,6 +41,14 @@ export type FoundBusRoute = {
   option: TransitOption;
   /** Every ride found from that stop, best first — what the card lists. */
   options: TransitOption[];
+  /**
+   * The ranked journeys, best first, at most three — 🥇🥈🥉.
+   *
+   * `origin` and `option` above are the first of these, kept as their own fields
+   * so everything that already reads them keeps working unchanged. Empty when
+   * every ride found has already departed.
+   */
+  routes: RouteOption[];
 };
 
 export type BusRouteResult =
@@ -63,6 +72,16 @@ export function walkingMinutes(metres: number): number {
 function toRef(stop: TransitStop | TransitStopRef): TransitStopRef {
   return { code: stop.code, name: stop.name, city: stop.city };
 }
+
+/**
+ * A stop to aim at, plus how far it leaves the user from the destination itself.
+ *
+ * That distance is the final walk, and it is part of the journey — a stop that
+ * gets you within fifty metres and one that leaves you a kilometre away are not
+ * the same arrival. Absent when the destination has no coordinates to measure
+ * against, in which case nothing here invents one.
+ */
+type DestinationStop = TransitStopRef & { metresToDestination?: number };
 
 /* ------------------------------------------------------------------- cache --- */
 
@@ -105,7 +124,12 @@ async function destinationStops(
   savedStop: TransitStopRef | undefined,
   destinationCoords: Coords | undefined,
   signal?: AbortSignal,
-): Promise<TransitStopRef[]> {
+): Promise<DestinationStop[]> {
+  /*
+   * A stop the user set up themselves is the truth, and nothing measured how far
+   * it is from the destination — so the final walk is unknown rather than
+   * guessed, and the journey simply does not count one.
+   */
   if (savedStop) return [savedStop];
   if (!destinationCoords) return [];
 
@@ -114,7 +138,11 @@ async function destinationStops(
     destinationCoords.longitude,
     { limit: DESTINATION_CANDIDATES, signal },
   );
-  return near.map(toRef);
+  return near.map((stop) => ({
+    ...toRef(stop),
+    // Measured from the destination itself, by the same provider that ranked them.
+    metresToDestination: stop.distanceMeters,
+  }));
 }
 
 async function searchRoute(params: {
@@ -188,44 +216,80 @@ async function searchRoute(params: {
         }),
       );
 
-      // Nearest candidate that actually has a ride — the whole point of this.
-      const found = attempts
-        .filter((attempt) => attempt.options.length > 0)
-        .sort(
-          (a, b) =>
-            (a.candidate.metres ?? 0) - (b.candidate.metres ?? 0),
-        )[0];
+      const withRides = attempts.filter((attempt) => attempt.options.length > 0);
+      if (withRides.length === 0) continue;
 
-      if (found) {
+      /*
+       * Every candidate stop's rides become whole journeys, and the journeys
+       * compete on when the user actually arrives — see routePlanner.ts. This is
+       * what replaced "the nearest stop that has a ride": a stop fifty metres
+       * away whose bus is forty minutes off now loses to one three hundred metres
+       * away whose bus is leaving, which is the right answer and the one distance
+       * alone could never give.
+       *
+       * The request count is unchanged. The same lookups are made; only the
+       * choice between their results is better.
+       */
+      const now = Date.now();
+      const routes = planRoutes({
+        candidates: withRides.map((attempt) => ({
+          stop: attempt.candidate.ref,
+          metresFromUser: attempt.candidate.metres,
+          options: attempt.options,
+        })),
+        targets: [{ stop: target, metresToDestination: target.metresToDestination }],
+        now,
+      });
+
+      if (routes.length > 0) {
+        const best = routes[0];
+        const winner = withRides.find(
+          (attempt) => attempt.candidate.ref.code === best.originStop.code,
+        );
+
         /*
-         * The timetable hands back "latest ride that still makes the arrival
-         * time" first, which is the right order for planning and the wrong one
-         * for leaving now — that ride may already have gone. So: the next ride
-         * that has not left yet, and only rides after it as the alternatives.
-         * If every one of them has left, the last is kept rather than hiding
-         * that the service is over for now.
+         * The chosen stop's own later rides, kept for the existing "נסיעות
+         * נוספות מאותה תחנה" list. Chronological and future-only, as before.
          */
-        const chronological = [...found.options].sort(
-          (a, b) => new Date(a.departure).getTime() - new Date(b.departure).getTime(),
-        );
-        const now = Date.now();
-        const upcoming = chronological.filter(
-          (option) => new Date(option.departure).getTime() >= now - 60_000,
-        );
-        const chosen = upcoming[0] ?? chronological[chronological.length - 1];
+        const upcoming = [...(winner?.options ?? [])]
+          .sort((a, b) => new Date(a.departure).getTime() - new Date(b.departure).getTime())
+          .filter((option) => new Date(option.departure).getTime() >= now - 60_000);
 
         return {
           status: 'ok',
           route: {
-            origin: found.candidate.ref,
-            metresFromUser: found.candidate.metres,
-            originSource: found.candidate.source,
+            origin: best.originStop,
+            metresFromUser: best.metresToOrigin,
+            originSource: winner?.candidate.source ?? 'auto',
             destinationStop: target,
-            option: chosen,
-            options: upcoming.length > 0 ? upcoming : [chosen],
+            option: best.legs[0].option,
+            options: upcoming.length > 0 ? upcoming : [best.legs[0].option],
+            routes,
           },
         };
       }
+
+      /*
+       * Rides exist but every one of them has already gone. Report the last one
+       * rather than hiding that the service is over for now — the same behaviour
+       * as before the planner.
+       */
+      const stale = withRides[0];
+      const last = [...stale.options].sort(
+        (a, b) => new Date(a.departure).getTime() - new Date(b.departure).getTime(),
+      )[stale.options.length - 1];
+      return {
+        status: 'ok',
+        route: {
+          origin: stale.candidate.ref,
+          metresFromUser: stale.candidate.metres,
+          originSource: stale.candidate.source,
+          destinationStop: target,
+          option: last,
+          options: [last],
+          routes: [],
+        },
+      };
     }
 
     return { status: 'no-ride-nearby', forced: params.forcedStop != null };
