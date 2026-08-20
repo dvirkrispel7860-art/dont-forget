@@ -24,6 +24,7 @@
   // Entry points only — everything else is pulled in by them.
   "files": [
     "../src/location.ts",
+    "../src/storage.ts",
     "../src/transit/leaveTime.ts",
     "../src/transit/routePlanner.ts",
     "../src/transit/routeProxy.ts",

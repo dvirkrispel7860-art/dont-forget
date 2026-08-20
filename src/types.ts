@@ -159,8 +159,22 @@ export type Settings = {
   autoOpenWaze: boolean;
 };
 
+/**
+ * What a brand-new install starts with.
+ *
+ * These apply only where a stored value is missing — `loadSettings` keeps
+ * whatever the user chose, including a deliberate "off", so changing a default
+ * here never overrides somebody's decision.
+ *
+ * `notifications: true` is the app-level switch, not permission. The operating
+ * system or browser still has to agree, and until it does nothing is sent; the
+ * settings screen shows the real permission state rather than implying this
+ * switch is the whole story.
+ */
 export const defaultSettings: Settings = {
   userName: '',
   notifications: true,
-  autoOpenWaze: false,
+  // Leaving is the moment navigation is wanted, so the app offers it by default
+  // rather than making it something to discover. Turning it off still sticks.
+  autoOpenWaze: true,
 };
