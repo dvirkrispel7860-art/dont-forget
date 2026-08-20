@@ -1,6 +1,8 @@
 import { Coords } from '../weather/types';
 import { transit } from './index';
 import { planRoutes, RouteOption } from './routePlanner';
+import { findRoutesViaProxy, isRouteProxyConfigured } from './routeProxy';
+import { walkingMinutes } from './walking';
 import { TransitOption, TransitStop, TransitStopRef } from './types';
 
 /**
@@ -22,9 +24,6 @@ const ORIGIN_CANDIDATES = 5;
 
 /** How many stops around the destination are worth testing. */
 const DESTINATION_CANDIDATES = 2;
-
-/** Walking pace used to turn a distance into minutes. Deliberately modest. */
-const WALK_METRES_PER_MINUTE = 80;
 
 /** A found route is reused for this long instead of searching again. */
 const CACHE_TTL_MS = 5 * 60_000;
@@ -64,10 +63,11 @@ export type BusRouteResult =
   | { status: 'no-ride-nearby'; forced: boolean }
   | { status: 'failed'; reason: string };
 
-/** Minutes of walking for a straight-line distance. An estimate, and labelled as one. */
-export function walkingMinutes(metres: number): number {
-  return Math.max(1, Math.round(metres / WALK_METRES_PER_MINUTE));
-}
+/**
+ * Re-exported so everything that already imports it from here keeps working. It
+ * lives in walking.ts, which imports nothing — see the note there on why.
+ */
+export { walkingMinutes };
 
 function toRef(stop: TransitStop | TransitStopRef): TransitStopRef {
   return { code: stop.code, name: stop.name, city: stop.city };
@@ -159,6 +159,51 @@ async function searchRoute(params: {
   signal?: AbortSignal;
 }): Promise<BusRouteResult> {
   try {
+    /*
+     * The search server first, when one is configured.
+     *
+     * It is the only thing that can offer a journey with a change: assembling
+     * one from stop_times costs about 14 MB on the phone, so it runs where
+     * bandwidth is free (see routeProxy.ts). It is asked only when it can
+     * actually help — both ends known as coordinates, and no stop the user
+     * insisted on, since a forced stop is an instruction, not a search.
+     *
+     * A failure here is not an error the user should see. The on-device
+     * direct-only search below runs instead, exactly as it did before any of
+     * this existed.
+     */
+    if (
+      isRouteProxyConfigured() &&
+      !params.forcedStop &&
+      params.userCoords &&
+      params.destinationCoords
+    ) {
+      const viaProxy = await findRoutesViaProxy({
+        from: params.userCoords,
+        to: params.destinationCoords,
+        arriveBy: params.arriveBy,
+        signal: params.signal,
+      });
+
+      if (viaProxy.status === 'ok' && viaProxy.routes.length > 0) {
+        const best = viaProxy.routes[0];
+        return {
+          status: 'ok',
+          route: {
+            origin: best.originStop,
+            metresFromUser: best.metresToOrigin,
+            originSource: 'auto',
+            destinationStop: best.destinationStop,
+            option: best.legs[0].option,
+            // The chosen journey's own legs; later rides from the same stop are
+            // an on-device notion and do not apply to a multi-leg journey.
+            options: best.legs.map((leg) => leg.option),
+            routes: viaProxy.routes,
+          },
+        };
+      }
+    }
+
     const targets = await destinationStops(
       params.savedDestinationStop,
       params.destinationCoords,

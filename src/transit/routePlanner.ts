@@ -1,4 +1,4 @@
-import { walkingMinutes } from './nearbyRoute';
+import { walkingMinutes } from './walking';
 import { TransitOption, TransitStopRef } from './types';
 
 /**
@@ -213,8 +213,150 @@ export function buildRouteOption(params: {
   };
 }
 
+/**
+ * A journey of one or more legs, as a search handed it over.
+ *
+ * This is the shape the route proxy returns (see routeProxy.ts). Scoring stays
+ * here rather than in the search, so a one-leg journey found on the device and a
+ * two-leg journey found by the proxy are ranked by the same function and can be
+ * compared against each other honestly.
+ */
+export type PlannedJourney = {
+  legs: {
+    option: TransitOption;
+    departureStop: TransitStopRef;
+    arrivalStop: TransitStopRef;
+    /** Walking to reach this leg's stop: from the user, or from the previous leg. */
+    walkBeforeMinutes: number;
+  }[];
+  /** Walking from the final stop to the destination itself. */
+  walkAfterMinutes: number;
+  /** Straight-line metres from the user to the first stop, when measured. */
+  metresToOrigin?: number;
+};
+
+/**
+ * A multi-leg journey, scored like any other.
+ *
+ * Returns null when the first leg has already gone, or when a change does not
+ * actually work — arriving after the next bus has left is not a journey, and
+ * offering it would be worse than offering nothing.
+ */
+export function buildJourney(params: {
+  journey: PlannedJourney;
+  now: number;
+}): RouteOption | null {
+  const { journey, now } = params;
+  if (journey.legs.length === 0) return null;
+
+  const legs: RouteLeg[] = [];
+  let totalWalkingMinutes = journey.walkAfterMinutes;
+  let totalRideMinutes = 0;
+
+  for (let i = 0; i < journey.legs.length; i += 1) {
+    const source = journey.legs[i];
+    const departureAt = new Date(source.option.departure).getTime();
+    const arrivalAt = new Date(source.option.arrival).getTime();
+    if (!Number.isFinite(departureAt) || !Number.isFinite(arrivalAt)) return null;
+
+    // The first leg must still be catchable; a departed journey is not an option.
+    if (i === 0 && departureAt < now) return null;
+
+    /*
+     * A change only counts if it can be made: off the previous bus, walk to this
+     * stop, and still be there before it leaves. Without this check the planner
+     * would happily propose a connection nobody can catch.
+     */
+    if (i > 0) {
+      const previous = legs[i - 1];
+      const readyAt = previous.arrivalAt + source.walkBeforeMinutes * 60_000;
+      if (departureAt < readyAt) return null;
+    }
+
+    const rideMinutes = minutesBetween(departureAt, arrivalAt);
+    totalRideMinutes += rideMinutes;
+    totalWalkingMinutes += source.walkBeforeMinutes;
+
+    legs.push({
+      kind: 'bus',
+      lineNumber: source.option.lineNumber,
+      agency: source.option.agency,
+      direction: source.option.headsign,
+      departureStop: source.departureStop,
+      arrivalStop: source.arrivalStop,
+      departureAt,
+      arrivalAt,
+      walkBeforeMinutes: source.walkBeforeMinutes,
+      // Only the last leg ends with a walk to the destination.
+      walkAfterMinutes: i === journey.legs.length - 1 ? journey.walkAfterMinutes : 0,
+      rideMinutes,
+      option: source.option,
+    });
+  }
+
+  const first = legs[0];
+  const last = legs[legs.length - 1];
+  const arrivalTime = last.arrivalAt + journey.walkAfterMinutes * 60_000;
+  const transfers = legs.length - 1;
+  const totalMinutes = minutesBetween(now, arrivalTime);
+  /*
+   * Everything that is neither walking nor riding: the wait for the first bus
+   * and any wait at a change. Derived rather than summed so the three parts
+   * always add up to the total the user is shown.
+   */
+  const totalWaitingMinutes = Math.max(
+    0,
+    totalMinutes - totalWalkingMinutes - totalRideMinutes,
+  );
+
+  return {
+    id: `${first.departureStop.code}:${legs.map((leg) => leg.option.id).join('+')}`,
+    originStop: first.departureStop,
+    destinationStop: last.arrivalStop,
+    legs,
+    totalWalkingMinutes,
+    totalWaitingMinutes,
+    totalRideMinutes,
+    totalMinutes,
+    transfers,
+    departureTime: first.departureAt,
+    arrivalTime,
+    score: scoreRoute({ totalMinutes, totalWalkingMinutes, transfers }),
+    ...(journey.metresToOrigin != null ? { metresToOrigin: journey.metresToOrigin } : {}),
+  };
+}
+
 /** How many journeys to offer. One recommendation and two alternatives. */
 export const MAX_ROUTE_OPTIONS = 3;
+
+/**
+ * Ranks journeys from any source — the device's direct-only search, the proxy's
+ * search with changes, or both together — and keeps the best few.
+ *
+ * Deduplicated by shape so the list is genuinely different choices.
+ */
+export function rankJourneys(params: {
+  journeys: PlannedJourney[];
+  now: number;
+  limit?: number;
+}): RouteOption[] {
+  const built = params.journeys
+    .map((journey) => buildJourney({ journey, now: params.now }))
+    .filter((route): route is RouteOption => route !== null);
+
+  built.sort((a, b) => a.score - b.score || a.arrivalTime - b.arrivalTime);
+
+  const seen = new Set<string>();
+  const chosen: RouteOption[] = [];
+  for (const route of built) {
+    const shape = `${route.originStop.code}|${route.legs.map((l) => l.lineNumber).join('>')}`;
+    if (seen.has(shape)) continue;
+    seen.add(shape);
+    chosen.push(route);
+    if (chosen.length >= (params.limit ?? MAX_ROUTE_OPTIONS)) break;
+  }
+  return chosen;
+}
 
 /**
  * Every journey worth offering, best first.

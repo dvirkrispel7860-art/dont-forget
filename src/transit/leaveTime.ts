@@ -1,4 +1,4 @@
-import { walkingMinutes } from './nearbyRoute';
+import { walkingMinutes } from './walking';
 import { TransitOption } from './types';
 
 /**
