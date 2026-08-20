@@ -29,6 +29,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "build:web": "expo export -p web",
+    "test": "node tests/run.js",
     "serve:web": "npx --yes serve@14 dist -s -l 4173",
     "typecheck": "tsc --noEmit"
   },

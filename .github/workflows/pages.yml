@@ -1,0 +1,133 @@
+name: Deploy to GitHub Pages
+
+# Only `main`, and only after it is pushed — so what is published is always a
+# state that exists in the repository.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Read the repo, write a Pages deployment, and exchange an OIDC token for it.
+# Nothing here needs a secret: Pages trusts the workflow itself.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. `cancel-in-progress: false` because cutting a live
+# deployment half-way is worse than waiting for it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the PWA
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The same gates as CI. Publishing something that does not typecheck or
+      # whose tests fail would defeat the point of having them.
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npm test
+
+      # Pages serves a project site from /<repo>/, not from the domain root, so
+      # every asset path has to be prefixed. This is set here rather than in
+      # app.json because it is true of *this deployment*, not of the app —
+      # locally and on any root-hosted domain the prefix would break it.
+      - name: Point the build at the Pages sub-path
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+          const base = '/' + process.env.GITHUB_REPOSITORY.split('/')[1];
+          config.expo.experiments = { ...config.expo.experiments, baseUrl: base };
+          fs.writeFileSync('app.json', JSON.stringify(config, null, 2) + '\n');
+          console.log('baseUrl =', base);
+          NODE
+
+      - name: Build
+        run: npm run build:web
+
+      # Expo prefixes the paths it generates, but not the ones written by hand in
+      # public/index.html and public/sw.js — the manifest, the icons, the service
+      # worker and the shell it caches are all root-absolute there, which is
+      # correct at a domain root and wrong under /<repo>/. Rewriting the built
+      # output keeps the source correct for root hosting and fixes the deployment.
+      #
+      # Without this the app still loads, but it is not installable and has no
+      # offline shell, because the manifest and the worker both 404.
+      - name: Repoint the hand-written paths at the sub-path
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const base = '/' + process.env.GITHUB_REPOSITORY.split('/')[1];
+
+          let html = fs.readFileSync('dist/index.html', 'utf8');
+          html = html
+            .replace(/href="\/manifest\.json"/g, `href="${base}/manifest.json"`)
+            .replace(/href="\/icons\//g, `href="${base}/icons/`)
+            .replace(/register\('\/sw\.js'\)/g, `register('${base}/sw.js')`);
+          fs.writeFileSync('dist/index.html', html);
+
+          // The worker caches the app shell by path, so it has to point at the
+          // app's index rather than the domain root.
+          let sw = fs.readFileSync('dist/sw.js', 'utf8');
+          sw = sw.replace("const APP_SHELL = '/';", `const APP_SHELL = '${base}/';`);
+          fs.writeFileSync('dist/sw.js', sw);
+
+          // And the manifest's own start_url and scope.
+          const manifest = JSON.parse(fs.readFileSync('dist/manifest.json', 'utf8'));
+          manifest.start_url = base + '/';
+          manifest.scope = base + '/';
+          manifest.icons = manifest.icons.map((icon) => ({
+            ...icon,
+            src: icon.src.startsWith('/') ? base + icon.src : icon.src,
+          }));
+          fs.writeFileSync('dist/manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+
+          console.log('repointed at', base);
+          NODE
+
+      # Pages 404s on any path the SPA router owns unless the host is told to
+      # serve index.html for them. Copying it to 404.html is the standard way to
+      # do that on Pages, and it is why deep links keep working.
+      - name: Serve unknown paths through the app
+        run: cp dist/index.html dist/404.html
+
+      # Stops Pages running the output through Jekyll, which would drop the
+      # _expo directory — every file in it begins with an underscore.
+      - name: Disable Jekyll
+        run: touch dist/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

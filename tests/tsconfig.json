@@ -1,0 +1,32 @@
+{
+  // The suites run on plain Node, so the modules they exercise are compiled to
+  // CommonJS here rather than bundled. Extends the project config so the code is
+  // type-checked under exactly the same rules it ships with.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // nodenext rather than plain commonjs: the package has no "type": "module",
+    // so TypeScript emits CommonJS `require` calls — which is what the suites
+    // need — while still honouring the resolution conditions the Expo base
+    // config sets. Forcing moduleResolution back to node10 conflicts with those.
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2020",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": false,
+    // rootDir keeps the output laid out like src/, which is what the suites
+    // require: .build/location.js, .build/transit/leaveTime.js, and so on.
+    "rootDir": "../src",
+    "outDir": ".build"
+  },
+  // Entry points only — everything else is pulled in by them.
+  "files": [
+    "../src/location.ts",
+    "../src/transit/leaveTime.ts",
+    "../src/notificationSchedule.ts",
+    "../src/nativeNotifications.native.ts",
+    "../src/ai/index.ts"
+  ]
+}
